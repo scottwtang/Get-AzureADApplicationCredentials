@@ -6,6 +6,12 @@
         This scripts uses the Microsoft.Graph module to get information for all Azure AD app registrations and Enterprise Applications with expiring certificates and client secrets, to assist with application management.
         Results are exported as a CSV file to the location determined in the script parameters.
 
+    .PARAMETER SearchPeriod
+        The number of upcoming days to search within for expiring credentials.
+
+    .PARAMETER Expired
+        Whether or not to include expired credentials in the results.
+
     .PARAMETER FolderPath
         Folder path to export the results to.
 
@@ -15,6 +21,18 @@
     .EXAMPLE
         # Run script and save results to the default folder with the default filename
         .\Get-AzureADApplicationCredentials-MSGraph.ps1
+
+        # Run script and return only credentials expiring within the next 10 days.
+        .\Get-AzureADApplicationCredentials-MSGraph.ps1 -SearchPeriod 10
+
+        # Run script and return credentials expiring within the next 10 days, and all credentials already expired.
+        .\Get-AzureADApplicationCredentials-MSGraph.ps1 -SearchPeriod 10 -Expired
+
+        # Run script and return only credentials already expired within the last 10 days.
+        .\Get-AzureADApplicationCredentials-MSGraph.ps1 -SearchPeriod -10
+
+        # Run script and return all credentials already expired.
+        .\Get-AzureADApplicationCredentials-MSGraph.ps1 -Expired
         
         # Run script and save results to the folder C:\AzureADAppsCredentials with the default filename
         .\Get-AzureADApplicationCredentials-MSGraph.ps1 -FolderPath C:\AzureADAppsCredentials
@@ -30,11 +48,19 @@
 param (
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    $FolderPath = "$env:USERPROFILE\Downloads",
+    [double]$SearchPeriod = [double]::PositiveInfinity,
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    $FileName = "$(Get-Date -f 'yyyy-MM-dd')-AzureADAppsCredentials.csv"
+    [switch]$Expired = $false,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $FolderPath = "$env:USERPROFILE\Downloads",
+
+    [Parameter(Mandatory = $false)]
+    [ValidateNotNullOrEmpty()]
+    [string] $FileName = "$(Get-Date -f 'yyyy-MM-dd')-AzureADAppsCredentials.csv"
 )    
 
 function Export-Credential {
@@ -64,8 +90,9 @@ function Export-Credential {
     )
 
     $now = Get-Date
+    $daysToExpire = ($Credential.EndDateTime - $now).Days
 
-    return [PSCustomObject] @{
+    $cred = [PSCustomObject] @{
         "ApplicationName"        = $App.DisplayName
         "ApplicationId"          = $App.AppId
         "ApplicationObjectId"    = $App.Id
@@ -78,8 +105,28 @@ function Export-Credential {
         "Expired"                = ($Credential.EndDateTime -lt $now)
         "StartDate"              = $Credential.StartDateTime
         "EndDate"                = $Credential.EndDateTime
-        "DaysToExpire"           = ($Credential.EndDateTime - $now).Days
+        "DaysToExpire"           = $daysToExpire
         "CertificateUsage"       = $Credential.Usage
+    }
+
+    if ($Expired) {
+        if ($SearchPeriod -lt 0) {
+            if ( ($SearchPeriod -le $daysToExpire) -and ($daysToExpire -lt 0) ) {
+                return $cred
+            }
+        }
+
+        else {
+            if ($SearchPeriod -ge $daysToExpire) {
+                return $cred
+            }
+        }
+    }
+
+    else {
+        if ( ($Credential.EndDateTime -gt $now) -and ($SearchPeriod -ge $daysToExpire) ) {
+            return $cred
+        }
     }
 }
 
@@ -96,15 +143,12 @@ function Get-Owners {
     )
 
     # Determine the object type which each use different cmdlets for retrieving the owner
-    switch ($ObjectType)
-    {
-        Application
-        {
+    switch ($ObjectType) {
+        Application {
             $owners = Get-MgApplicationOwner -ApplicationId $app.Id
         }
 
-        ServicePrincipal
-        {
+        ServicePrincipal {
             $owners = Get-MgServicePrincipalOwner -ServicePrincipalId $AppObjectId
         }
     }
@@ -117,17 +161,13 @@ function Get-Owners {
 
     # Determine if each owner is a user or application and join into one string
     $ownerNames = @(
-        foreach ($owner in $owners) 
-        {
-            switch ($owner.AdditionalProperties."@odata.type")
-            {
-                "#microsoft.graph.user"
-                {
+        foreach ($owner in $owners) {
+            switch ($owner.AdditionalProperties."@odata.type") {
+                "#microsoft.graph.user" {
                     $owner.AdditionalProperties.userPrincipalName
                 }
 
-                "#microsoft.graph.servicePrincipal"
-                {
+                "#microsoft.graph.servicePrincipal" {
                     $owner.AdditionalProperties.appDisplayName
                 }
             }
@@ -138,56 +178,58 @@ function Get-Owners {
 }
 
 # Check if an Azure AD session is active
-try
-{
+try {
     Get-MgOrganization -ErrorAction Stop | Out-Null
 }
-catch
-{
+
+catch {
     Connect-MgGraph -Scopes "Application.Read.All", "User.Read.All"
 }
 
+# Automatically set the Expired switch if the search period is in the past
+if ($SearchPeriod -lt 0) {
+    $Expired = $true
+}
+
 # Get all Azure AD App Registrations
-$applications = Get-MgApplication -All
+$applications = Get-MgApplication -All | Where-Object { ($_.KeyCredentials) -or ($_.PasswordCredentials) }
 
 # Get all Azure AD Enterprise Applications configured for SAML SSO
 $servicePrincipals = Get-MgServicePrincipal -All | Where-Object { 
-    ($_.Tags -contains "WindowsAzureActiveDirectoryCustomSingleSignOnApplication") -or 
+    (($_.KeyCredentials) -and
+    (($_.Tags -contains "WindowsAzureActiveDirectoryCustomSingleSignOnApplication") -or 
     ($_.Tags -contains "WindowsAzureActiveDirectoryGalleryApplicationNonPrimaryV1") -or 
     ($_.Tags -contains "WindowsAzureActiveDirectoryGalleryApplicationPrimaryV1") -or 
-    ($_.Tags -contains "WindowsAzureActiveDirectoryIntegratedApp")
+    ($_.Tags -contains "WindowsAzureActiveDirectoryIntegratedApp")))   
 }
 
 # Loop through each App Registration and retrieve the credentials properties
-$output = foreach ($app in $applications)
-{
+$output = @(
+    foreach ($app in $applications) {
 
-    # Get the app owners and their object ID
-    $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.Id -ObjectType "Application"
+        # Get the app owners and their object ID
+        $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.Id -ObjectType "Application"
 
-    # Get certificate properties
-    foreach ($cert in $app.KeyCredentials)
-    {
-        Export-Credential -App $app -ObjectType "Application" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
+        # Get certificate properties
+        foreach ($cert in $app.KeyCredentials) {
+            Export-Credential -App $app -ObjectType "Application" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
+        }
+
+        # Get client secret properties
+        foreach ($secret in $app.PasswordCredentials) {
+            Export-Credential -App $app -ObjectType "Application" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $secret -CredentialType "ClientSecret"
+        }
     }
-
-    # Get client secret properties
-    foreach ($secret in $app.PasswordCredentials)
-    {
-        Export-Credential -App $app -ObjectType "Application" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $secret -CredentialType "ClientSecret"
-    }
-}
+)
 
 # Loop through each Enterprise Application and retrieve the credentials properties
-$output += foreach ($app in $servicePrincipals)
-{
+$output += foreach ($app in $servicePrincipals) {
 
     # Get the app owners and their object ID
     $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.Id -ObjectType "ServicePrincipal"
 
     # Get certificate properties filtering for certificates with Usage of Verify, to exclude the private key objects used for signing
-    foreach ($cert in $app.KeyCredentials | Where-Object {$_.Usage -eq "Verify"} )
-    {
+    foreach ($cert in $app.KeyCredentials | Where-Object {$_.Usage -eq "Verify"} ) {
         Export-Credential -App $app -ObjectType "ServicePrincipal" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
     }
 }
@@ -195,12 +237,11 @@ $output += foreach ($app in $servicePrincipals)
 # Export the results as a CSV file
 $filePath = Join-Path $FolderPath -ChildPath $FileName
 
-try
-{
+try {
     $output | Sort-Object ApplicationName | Export-CSV $filePath -NoTypeInformation
     Write-Host "Export to $filePath succeeded" -ForegroundColor Cyan
 }
-catch
-{
+
+catch {
     Write-Error "Export to $filePath failed | $_ "
 }
