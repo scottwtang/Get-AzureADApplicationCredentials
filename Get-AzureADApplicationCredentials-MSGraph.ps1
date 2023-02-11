@@ -56,11 +56,11 @@ param (
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string] $FolderPath = "$env:USERPROFILE\Downloads",
+    [string]$FolderPath = "$env:USERPROFILE\Downloads",
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string] $FileName = "$(Get-Date -f 'yyyy-MM-dd')-AzureADAppsCredentials.csv"
+    [string]$FileName = "$(Get-Date -f 'yyyy-MM-dd')-AzureADAppsCredentials.csv"
 )    
 
 function Export-Credential {
@@ -71,7 +71,7 @@ function Export-Credential {
         $App,        
 
         [Parameter(Mandatory = $true)]
-        [string] $ObjectType,        
+        [string]$ObjectType,        
 
         [Parameter(Mandatory = $false)]
         $OwnerNames,
@@ -86,7 +86,7 @@ function Export-Credential {
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
         [ValidateSet("Certificate", "ClientSecret")]
-        [string] $CredentialType
+        [string]$CredentialType
     )
 
     $now = Get-Date
@@ -135,11 +135,11 @@ function Get-Owners {
     param (
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
-        [string] $AppObjectId,
+        [string]$AppObjectId,
         
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
-        [string] $ObjectType
+        [string]$ObjectType
     )
 
     # Determine the object type which each use different cmdlets for retrieving the owner
@@ -203,8 +203,9 @@ $servicePrincipals = Get-MgServicePrincipal -All | Where-Object {
     ($_.Tags -contains "WindowsAzureActiveDirectoryIntegratedApp")))   
 }
 
-# Loop through each App Registration and retrieve the credentials properties
 $output = @(
+
+    # Loop through each App Registration and retrieve the credentials properties
     foreach ($app in $applications) {
 
         # Get the app owners and their object ID
@@ -220,19 +221,19 @@ $output = @(
             Export-Credential -App $app -ObjectType "Application" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $secret -CredentialType "ClientSecret"
         }
     }
-)
 
-# Loop through each Enterprise Application and retrieve the credentials properties
-$output += foreach ($app in $servicePrincipals) {
+    # Loop through each Enterprise Application and retrieve the credentials properties 
+    foreach ($app in $servicePrincipals) {
 
-    # Get the app owners and their object ID
-    $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.Id -ObjectType "ServicePrincipal"
+        # Get the app owners and their object ID
+        $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.Id -ObjectType "ServicePrincipal"
 
-    # Get certificate properties filtering for certificates with Usage of Verify, to exclude the private key objects used for signing
-    foreach ($cert in $app.KeyCredentials | Where-Object {$_.Usage -eq "Verify"} ) {
-        Export-Credential -App $app -ObjectType "ServicePrincipal" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
+        # Get certificate properties filtering for certificates with Usage of Verify, to exclude the private key objects used for signing
+        foreach ($cert in $app.KeyCredentials | Where-Object {$_.Usage -eq "Verify"} ) {
+            Export-Credential -App $app -ObjectType "ServicePrincipal" -OwnerNames $ownerNames -OwnerIds $ownerIds -Credential $cert -CredentialType "Certificate"
+        }
     }
-}
+)
 
 # Export the results as a CSV file
 $filePath = Join-Path $FolderPath -ChildPath $FileName
