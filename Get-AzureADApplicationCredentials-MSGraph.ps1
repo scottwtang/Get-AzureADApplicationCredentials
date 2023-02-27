@@ -145,7 +145,7 @@ function Get-Owners {
     # Determine the object type which each use different cmdlets for retrieving the owner
     switch ($ObjectType) {
         Application {
-            $owners = Get-MgApplicationOwner -ApplicationId $app.Id
+            $owners = Get-MgApplicationOwner -ApplicationId $AppObjectId
         }
 
         ServicePrincipal {
