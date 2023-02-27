@@ -207,6 +207,7 @@ $output = @(
 
     # Loop through each App Registration and retrieve the credentials properties
     foreach ($app in $applications) {
+        Write-Host "Evaluating application $($applications.IndexOf($app)) of $(@($applications).Count): [$($app.DisplayName)] with app Id [$($app.AppId)]"
 
         # Get the app owners and their object ID
         $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.Id -ObjectType "Application"
@@ -224,6 +225,7 @@ $output = @(
 
     # Loop through each Enterprise Application and retrieve the credentials properties 
     foreach ($app in $servicePrincipals) {
+        Write-Host "Evaluating service principal $($servicePrincipals.IndexOf($app)) of $(@($servicePrincipals).Count): [$($app.DisplayName)] with app Id [$($app.AppId)]"
 
         # Get the app owners and their object ID
         $ownerNames, $ownerIds = Get-Owners -AppObjectId $app.Id -ObjectType "ServicePrincipal"
